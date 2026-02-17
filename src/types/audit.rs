@@ -62,9 +62,20 @@ pub struct AuditReport {
     /// URL to markdown report on Arweave
     #[serde(skip_serializing_if = "Option::is_none")]
     pub report_markdown_url: Option<String>,
+    /// URL to JSON report on Arweave
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub report_json_url: Option<String>,
     /// Signature of the report
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signature: Option<String>,
+
+    // ===== ON-CHAIN FEEDBACK =====
+    /// Chain ID where feedback was submitted
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub feedback_chain_id: Option<u64>,
+    /// Transaction hash of the feedback submission
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub feedback_tx_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -390,7 +401,12 @@ impl AuditReport {
 
             // Links
             report_markdown_url: None,
+            report_json_url: None,
             signature: None,
+
+            // On-chain feedback
+            feedback_chain_id: None,
+            feedback_tx_hash: None,
         }
     }
 
@@ -419,6 +435,15 @@ impl AuditReport {
     /// Set the markdown report URL
     pub fn set_markdown_url(&mut self, url: &str) {
         self.report_markdown_url = Some(url.to_string());
+    }
+
+    pub fn set_json_url(&mut self, url: &str) {
+        self.report_json_url = Some(url.to_string());
+    }
+
+    pub fn set_feedback_tx(&mut self, chain_id: u64, tx_hash: &str) {
+        self.feedback_chain_id = Some(chain_id);
+        self.feedback_tx_hash = Some(tx_hash.to_string());
     }
 
     /// Count issues by severity

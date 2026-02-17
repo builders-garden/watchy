@@ -225,7 +225,8 @@ async fn run_audit_job(state: Arc<AppState>, audit_id: String, agent_id: u64, ch
                                                     "JSON report uploaded to Arweave: {}",
                                                     json_result.arweave_url
                                                 );
-                                                json_arweave_url = Some(json_result.arweave_url);
+                                                json_arweave_url = Some(json_result.arweave_url.clone());
+                                                report.set_json_url(&json_result.arweave_url);
                                             }
                                             Err(e) => {
                                                 error!("Failed to upload JSON to Irys: {}", e);
@@ -280,6 +281,7 @@ async fn run_audit_job(state: Arc<AppState>, audit_id: String, agent_id: u64, ch
                                                         "On-chain feedback submitted: {} (tx: {})",
                                                         feedback_uri, tx_hash
                                                     );
+                                                    report.set_feedback_tx(chain_id, &tx_hash);
                                                 }
                                                 Err(e) => {
                                                     error!("Failed to submit on-chain feedback: {}", e);
