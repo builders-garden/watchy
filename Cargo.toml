@@ -1,0 +1,67 @@
+[package]
+name = "watchy"
+version = "0.1.0"
+edition = "2021"
+description = "EIP-8004 Agent Watchtower Service"
+license = "MIT"
+
+[dependencies]
+# Web framework
+axum = { version = "0.7", features = ["macros"] }
+tokio = { version = "1", features = ["full"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "trace"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# HTTP client
+reqwest = { version = "0.11", default-features = false, features = ["json", "native-tls", "multipart"] }
+
+# Blockchain
+alloy = { version = "0.3", features = [
+    "providers",
+    "contract",
+    "sol-types",
+    "signers",
+    "signer-local",
+    "signer-mnemonic",  # For EigenCloud mnemonic support
+    "transports",
+    "transport-http",
+] }
+
+# Logging & tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Error handling
+thiserror = "1"
+anyhow = "1"
+
+# Configuration
+dotenvy = "0.15"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Utilities
+uuid = { version = "1", features = ["v4", "serde"] }
+url = { version = "2", features = ["serde"] }
+hex = "0.4"
+base64 = "0.22"
+urlencoding = "2.1"
+sha2 = "0.10"
+
+# Arweave/Irys uploads (ANS-104)
+bundles_rs = { git = "https://github.com/loadnetwork/bundles-rs", branch = "main" }
+
+# Redis
+redis = { version = "0.25", features = ["tokio-comp", "connection-manager"] }
+
+# Graceful shutdown
+tokio-util = "0.7"
+
+[dev-dependencies]
+tokio-test = "0.4"
+wiremock = "0.6"
