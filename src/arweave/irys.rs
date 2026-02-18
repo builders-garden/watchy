@@ -1,11 +1,10 @@
 use alloy::primitives::{keccak256, Address, PrimitiveSignature};
 use alloy::signers::local::PrivateKeySigner;
 use alloy::signers::Signer;
-use bundles_rs::ans104::{data_item::DataItem, tags::Tag};
-use bundles_rs::crypto::ethereum::EthereumSigner;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
+use super::ans104::{DataItem, Tag};
 use crate::types::WatchyError;
 
 /// Turbo upload endpoint for Ethereum
@@ -14,7 +13,7 @@ const TURBO_UPLOAD_URL: &str = "https://turbo.ardrive.io/tx/ethereum";
 /// Irys client for uploading data to Arweave via Turbo
 pub struct IrysClient {
     http_client: reqwest::Client,
-    signer: Option<EthereumSigner>,
+    private_key: Option<String>,
     address: Option<Address>,
 }
 
@@ -43,33 +42,21 @@ impl IrysClient {
     /// If private_key is provided, uploads will be signed.
     /// Without a key, uploads will fail.
     pub fn new(private_key: Option<&str>) -> Result<Self, WatchyError> {
-        let (signer, address) = if let Some(key) = private_key {
-            let key = key.strip_prefix("0x").unwrap_or(key);
-            let key_bytes = hex::decode(key)
-                .map_err(|e| WatchyError::Internal(format!("Invalid private key hex: {}", e)))?;
+        let (pk, address) = if let Some(key) = private_key {
+            let key_clean = key.strip_prefix("0x").unwrap_or(key);
+            let signer: PrivateKeySigner = key_clean
+                .parse()
+                .map_err(|e| WatchyError::Internal(format!("Invalid private key: {}", e)))?;
 
-            if key_bytes.len() != 32 {
-                return Err(WatchyError::Internal(format!(
-                    "Private key must be 32 bytes, got {}",
-                    key_bytes.len()
-                )));
-            }
-
-            let signer = EthereumSigner::from_bytes(&key_bytes)
-                .map_err(|e| WatchyError::Internal(format!("Failed to create signer: {}", e)))?;
-
-            // Get the address from the signer
-            let addr_bytes = signer.address();
-            let address: Address = Address::from_slice(&addr_bytes);
-
-            (Some(signer), Some(address))
+            let address = signer.address();
+            (Some(key.to_string()), Some(address))
         } else {
             (None, None)
         };
 
         Ok(Self {
             http_client: reqwest::Client::new(),
-            signer,
+            private_key: pk,
             address,
         })
     }
@@ -80,8 +67,6 @@ impl IrysClient {
     }
 
     /// Upload data to Arweave via Turbo using ANS-104 DataItem format
-    ///
-    /// Uses the bundles-rs crate for proper DataItem creation and signing.
     pub async fn upload(
         &self,
         data: &[u8],
@@ -94,7 +79,7 @@ impl IrysClient {
             size, content_type
         );
 
-        let signer = self.signer.as_ref().ok_or_else(|| {
+        let private_key = self.private_key.as_ref().ok_or_else(|| {
             WatchyError::Internal("Turbo upload requires a signer (PRIVATE_KEY)".to_string())
         })?;
 
@@ -106,14 +91,15 @@ impl IrysClient {
             }
         }
 
-        // Create and sign the DataItem using bundles-rs
+        // Create and sign the DataItem using our native ANS-104 implementation
         let data_item = DataItem::build_and_sign(
-            signer,
+            private_key,
             None, // no target
             None, // no anchor
             all_tags,
             data.to_vec(),
         )
+        .await
         .map_err(|e| WatchyError::Internal(format!("Failed to create DataItem: {}", e)))?;
 
         // Serialize the DataItem to bytes

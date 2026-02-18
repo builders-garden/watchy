@@ -53,9 +53,8 @@ base64 = "0.22"
 urlencoding = "2.1"
 sha2 = "0.10"
 
-# Arweave/Irys uploads (ANS-104)
-# Pin to v0.2.1 tag for stability
-bundles_rs = { git = "https://github.com/loadnetwork/bundles-rs", tag = "v0.2.1" }
+# Note: ANS-104 DataItem implementation is native (src/arweave/ans104.rs)
+# This avoids the bundles-rs workspace dependency issue
 
 # Redis
 redis = { version = "0.25", features = ["tokio-comp", "connection-manager"] }
