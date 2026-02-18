@@ -226,6 +226,10 @@ pub fn generate_markdown_report(
         "| Recommended Fields | {} | `active`, `services`, `supportedTrust`, `updatedAt` |\n",
         pass_fail(report.checks.metadata.recommended_fields.passed)
     ));
+    md.push_str(&format!(
+        "| Valid URLs | {} | Image, endpoints, and documentation URLs are valid |\n",
+        pass_fail(report.checks.metadata.urls_valid.passed)
+    ));
     md.push_str("\n");
 
     // ----- Endpoints -----

@@ -1,7 +1,6 @@
 use native_tls::TlsConnector;
 use std::net::ToSocketAddrs;
 use tracing::{debug, warn};
-use x509_parser::prelude::*;
 
 use crate::types::{Issue, SecurityChecks, SecurityHeadersCheck, Severity};
 
@@ -117,8 +116,8 @@ async fn check_tls(endpoint: &str) -> Result<TlsInfo, String> {
     let host = url.host_str().ok_or("No host in URL")?;
     let port = url.port().unwrap_or(443);
 
-    // Try to get certificate expiry using native-tls
-    let cert_days = get_certificate_expiry_days(host, port).await;
+    // Check if we can establish a valid TLS connection (cert must be valid)
+    let cert_valid = check_certificate_valid(host, port).await;
 
     // Also do a standard TLS check with reqwest to verify connectivity
     let client = reqwest::Client::builder()
@@ -133,8 +132,8 @@ async fn check_tls(endpoint: &str) -> Result<TlsInfo, String> {
             Ok(TlsInfo {
                 valid: true,
                 version: "TLS 1.2+".to_string(),
-                cert_valid: cert_days.map(|d| d > 0).unwrap_or(true),
-                cert_days_remaining: cert_days,
+                cert_valid,
+                cert_days_remaining: None, // Would require x509 parsing
             })
         }
         Err(e) => {
@@ -146,64 +145,54 @@ async fn check_tls(endpoint: &str) -> Result<TlsInfo, String> {
                 Ok(TlsInfo {
                     valid: true,
                     version: "TLS 1.2+".to_string(),
-                    cert_valid: cert_days.map(|d| d > 0).unwrap_or(true),
-                    cert_days_remaining: cert_days,
+                    cert_valid,
+                    cert_days_remaining: None,
                 })
             }
         }
     }
 }
 
-/// Get the number of days until the certificate expires
-async fn get_certificate_expiry_days(host: &str, port: u16) -> Option<i64> {
-    // Run in a blocking task since native-tls is sync
+/// Check if the certificate is valid (not expired, trusted)
+async fn check_certificate_valid(host: &str, port: u16) -> bool {
     let host = host.to_string();
     tokio::task::spawn_blocking(move || {
-        get_cert_expiry_sync(&host, port)
+        check_cert_valid_sync(&host, port)
     })
     .await
-    .ok()
-    .flatten()
+    .unwrap_or(false)
 }
 
-/// Synchronous certificate expiry check
-fn get_cert_expiry_sync(host: &str, port: u16) -> Option<i64> {
-    // Build TLS connector
-    let connector = TlsConnector::builder()
-        .danger_accept_invalid_certs(true) // Accept to inspect, we check validity separately
+/// Synchronous certificate validity check
+fn check_cert_valid_sync(host: &str, port: u16) -> bool {
+    // Build TLS connector with strict validation
+    let connector = match TlsConnector::builder()
+        .danger_accept_invalid_certs(false) // Strict validation
         .build()
-        .ok()?;
+    {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
 
     // Resolve address
-    let addr = format!("{}:{}", host, port)
-        .to_socket_addrs()
-        .ok()?
-        .next()?;
+    let addr = match format!("{}:{}", host, port).to_socket_addrs() {
+        Ok(mut addrs) => match addrs.next() {
+            Some(a) => a,
+            None => return false,
+        },
+        Err(_) => return false,
+    };
 
     // Connect with timeout
-    let stream = std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(5)).ok()?;
-    stream.set_read_timeout(Some(std::time::Duration::from_secs(5))).ok()?;
-    stream.set_write_timeout(Some(std::time::Duration::from_secs(5))).ok()?;
+    let stream = match std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(5)) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+    let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(5)));
 
-    // TLS handshake
-    let tls_stream = connector.connect(host, stream).ok()?;
-
-    // Get peer certificate
-    let cert_der = tls_stream.peer_certificate().ok()??;
-    let cert_bytes = cert_der.to_der().ok()?;
-
-    // Parse certificate
-    let (_, cert) = X509Certificate::from_der(&cert_bytes).ok()?;
-
-    // Get expiry time
-    let not_after = cert.validity().not_after;
-    let expiry_time = not_after.timestamp();
-
-    // Calculate days remaining
-    let now = chrono::Utc::now().timestamp();
-    let days_remaining = (expiry_time - now) / 86400;
-
-    Some(days_remaining)
+    // TLS handshake - if this succeeds, cert is valid
+    connector.connect(host, stream).is_ok()
 }
 
 fn has_minimum_headers(headers: &SecurityHeadersCheck) -> bool {
