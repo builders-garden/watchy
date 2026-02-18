@@ -16,6 +16,28 @@ use crate::store::AuditJob;
 use crate::types::{AuditRequest, AuditStatus, WatchyError};
 use crate::AppState;
 
+// =============================================================================
+// TESTNET-ONLY MODE
+// =============================================================================
+// Set to `false` to enable mainnet audits (Base: 8453, Ethereum: 1)
+// Currently restricted to testnets to prevent accidental mainnet transactions
+const TESTNET_ONLY: bool = true;
+
+/// Chain IDs allowed when TESTNET_ONLY is true
+const ALLOWED_TESTNET_CHAINS: &[u64] = &[
+    84532,    // Base Sepolia
+    11155111, // Sepolia
+];
+
+/// Check if a chain is allowed for audits
+fn is_chain_allowed(chain_id: u64) -> bool {
+    if TESTNET_ONLY {
+        ALLOWED_TESTNET_CHAINS.contains(&chain_id)
+    } else {
+        true // All configured chains are allowed
+    }
+}
+
 #[derive(Serialize)]
 pub struct HealthResponse {
     pub status: String,
@@ -83,6 +105,14 @@ pub async fn request_audit(
     if chain.chain_type != ChainType::Evm {
         return Err(WatchyError::InvalidRequest(format!(
             "Chain {} ({}) is not yet supported for audits. Only EVM chains are supported.",
+            chain.name, chain_id
+        )));
+    }
+
+    // Check if chain is allowed (testnet-only mode)
+    if !is_chain_allowed(chain_id) {
+        return Err(WatchyError::InvalidRequest(format!(
+            "Chain {} ({}) is not enabled. Currently only testnets are allowed: Base Sepolia (84532), Sepolia (11155111)",
             chain.name, chain_id
         )));
     }
