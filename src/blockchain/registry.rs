@@ -1,11 +1,12 @@
 use alloy::{
-    network::Ethereum,
+    network::{Ethereum, EthereumWallet},
     primitives::{Address, U256},
     providers::{Provider, ProviderBuilder, RootProvider},
+    signers::local::PrivateKeySigner,
     transports::http::{Client, Http},
 };
 use std::str::FromStr;
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 use url::Url;
 
 use crate::abi::IIdentityRegistry::IIdentityRegistryInstance;
@@ -184,5 +185,157 @@ impl RegistryClient {
     #[allow(dead_code)]
     pub fn registry_address(&self) -> &Address {
         &self.registry_address
+    }
+
+    /// Register a new agent (mints NFT with empty URI)
+    ///
+    /// # Arguments
+    /// * `private_key` - The private key to sign the transaction (from TEE wallet)
+    ///
+    /// # Returns
+    /// * `(agent_id, tx_hash)` - The newly minted agent ID and transaction hash
+    pub async fn register_agent(
+        &self,
+        private_key: &str,
+    ) -> Result<(u64, String), WatchyError> {
+        let key = private_key.strip_prefix("0x").unwrap_or(private_key);
+        let signer: PrivateKeySigner = key
+            .parse()
+            .map_err(|e| WatchyError::Internal(format!("Invalid private key: {}", e)))?;
+
+        info!("Registering new agent (empty URI)");
+
+        // Create wallet and provider
+        let wallet = EthereumWallet::from(signer);
+        let provider = ProviderBuilder::new()
+            .with_recommended_fillers()
+            .wallet(wallet)
+            .on_http(self.rpc_url.clone());
+
+        // Create contract instance
+        let contract = IIdentityRegistryInstance::new(self.registry_address, &provider);
+
+        // Call register() - no URI version
+        let tx = contract.register_0();
+
+        // Send the transaction
+        let pending = tx.send().await.map_err(|e| {
+            WatchyError::BlockchainError(format!("Failed to register agent: {}", e))
+        })?;
+
+        let tx_hash = format!("0x{}", hex::encode(pending.tx_hash().as_slice()));
+        info!("Registration transaction sent: {}", tx_hash);
+
+        // Wait for confirmation and get receipt
+        let receipt = pending.get_receipt().await.map_err(|e| {
+            WatchyError::BlockchainError(format!("Failed to get receipt: {}", e))
+        })?;
+
+        if !receipt.status() {
+            return Err(WatchyError::BlockchainError(
+                "Registration transaction reverted".to_string(),
+            ));
+        }
+
+        // Parse the Registered event to get the agent ID
+        // The event signature: Registered(uint256 indexed agentId, string agentURI, address indexed owner)
+        let agent_id = receipt
+            .inner
+            .logs()
+            .iter()
+            .find_map(|log| {
+                // The agentId is the first indexed topic (topic[1] after event signature)
+                if log.topics().len() >= 2 {
+                    let id_bytes = log.topics()[1];
+                    Some(U256::from_be_bytes(id_bytes.0).try_into().unwrap_or(0u64))
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| {
+                WatchyError::BlockchainError("Could not parse agent ID from event".to_string())
+            })?;
+
+        info!(
+            "Agent registered: ID {} (tx: {}, block: {})",
+            agent_id,
+            tx_hash,
+            receipt.block_number.unwrap_or_default()
+        );
+
+        Ok((agent_id, tx_hash))
+    }
+
+    /// Update the metadata URI for an existing agent
+    ///
+    /// # Arguments
+    /// * `agent_id` - The agent token ID
+    /// * `uri` - The new URI (e.g., "data:application/json;base64,..." or IPFS/Arweave URL)
+    /// * `private_key` - The private key to sign the transaction (from TEE wallet)
+    ///
+    /// # Returns
+    /// * `tx_hash` - The transaction hash
+    pub async fn set_agent_uri(
+        &self,
+        agent_id: u64,
+        uri: &str,
+        private_key: &str,
+    ) -> Result<String, WatchyError> {
+        let key = private_key.strip_prefix("0x").unwrap_or(private_key);
+        let signer: PrivateKeySigner = key
+            .parse()
+            .map_err(|e| WatchyError::Internal(format!("Invalid private key: {}", e)))?;
+
+        info!(
+            "Updating URI for agent {} ({} bytes)",
+            agent_id,
+            uri.len()
+        );
+
+        // Create wallet and provider
+        let wallet = EthereumWallet::from(signer);
+        let provider = ProviderBuilder::new()
+            .with_recommended_fillers()
+            .wallet(wallet)
+            .on_http(self.rpc_url.clone());
+
+        // Create contract instance
+        let contract = IIdentityRegistryInstance::new(self.registry_address, &provider);
+
+        // Call setAgentURI
+        let tx = contract.setAgentURI(U256::from(agent_id), uri.to_string());
+
+        // Send the transaction
+        let pending = tx.send().await.map_err(|e| {
+            let err_str = e.to_string();
+            if err_str.contains("NotAuthorized") || err_str.contains("not authorized") {
+                WatchyError::Internal("Not authorized to update this agent's URI".to_string())
+            } else {
+                WatchyError::BlockchainError(format!("Failed to set agent URI: {}", err_str))
+            }
+        })?;
+
+        let tx_hash = format!("0x{}", hex::encode(pending.tx_hash().as_slice()));
+        info!("setAgentURI transaction sent: {}", tx_hash);
+
+        // Wait for confirmation
+        let receipt = pending.get_receipt().await.map_err(|e| {
+            WatchyError::BlockchainError(format!("Failed to get receipt: {}", e))
+        })?;
+
+        if !receipt.status() {
+            return Err(WatchyError::BlockchainError(
+                "setAgentURI transaction reverted".to_string(),
+            ));
+        }
+
+        info!(
+            "Agent {} URI updated (tx: {}, block: {})",
+            agent_id,
+            tx_hash,
+            receipt.block_number.unwrap_or_default()
+        );
+
+        Ok(tx_hash)
     }
 }

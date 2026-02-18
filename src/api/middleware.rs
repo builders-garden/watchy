@@ -42,3 +42,36 @@ pub async fn require_api_key(
         }
     }
 }
+
+/// Middleware to validate Admin API key for privileged operations.
+///
+/// ADMIN_API_KEY is REQUIRED for admin endpoints. If not configured, admin endpoints are disabled.
+pub async fn require_admin_api_key(
+    State(state): State<Arc<AppState>>,
+    request: Request<Body>,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    // Admin API key is required - if not configured, deny all requests
+    let Some(expected_key) = &state.config.admin_api_key else {
+        warn!("Admin endpoint called but ADMIN_API_KEY is not configured");
+        return Err(StatusCode::FORBIDDEN);
+    };
+
+    // Check X-Admin-API-Key header
+    let provided_key = request
+        .headers()
+        .get("X-Admin-API-Key")
+        .and_then(|v| v.to_str().ok());
+
+    match provided_key {
+        Some(key) if key == expected_key => Ok(next.run(request).await),
+        Some(_) => {
+            warn!("Invalid admin API key provided");
+            Err(StatusCode::UNAUTHORIZED)
+        }
+        None => {
+            warn!("Missing X-Admin-API-Key header");
+            Err(StatusCode::UNAUTHORIZED)
+        }
+    }
+}

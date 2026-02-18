@@ -9,6 +9,7 @@ use tracing::{error, info};
 
 use crate::arweave::{irys::sign_report, IrysClient};
 use crate::audit::{generate_markdown_report, metadata, AuditEngine};
+use crate::blockchain::registry::RegistryClient;
 use crate::blockchain::reputation::ReputationClient;
 use crate::chains::{get_chain, get_rpc_url, supported_chain_ids, ChainType};
 use crate::ipfs::IpfsClient;
@@ -207,8 +208,6 @@ async fn run_audit_job(state: Arc<AppState>, audit_id: String, agent_id: u64, ch
             .ok();
 
             // Upload to Arweave and submit on-chain feedback (if private key is configured)
-            let mut json_arweave_url: Option<String> = None;
-
             if let Some(private_key) = state.config.private_key() {
                 match IrysClient::new(Some(private_key)) {
                     Ok(irys) => {
@@ -255,8 +254,60 @@ async fn run_audit_job(state: Arc<AppState>, audit_id: String, agent_id: u64, ch
                                                     "JSON report uploaded to Arweave: {}",
                                                     json_result.arweave_url
                                                 );
-                                                json_arweave_url = Some(json_result.arweave_url.clone());
                                                 report.set_json_url(&json_result.arweave_url);
+
+                                                // Step 6: Submit on-chain feedback
+                                                // IMPORTANT: Use report_json (the uploaded JSON) for hash computation
+                                                // to ensure feedbackHash matches the content at feedbackURI
+                                                let chain = get_chain(chain_id);
+                                                let rpc_url = get_rpc_url(chain_id);
+
+                                                if let (Some(chain), Some(rpc), Some(rep_addr)) =
+                                                    (chain, rpc_url, chain.and_then(|c| c.reputation_address))
+                                                {
+                                                    info!(
+                                                        "Submitting on-chain feedback to {} ({})",
+                                                        chain.name, rep_addr
+                                                    );
+
+                                                    match ReputationClient::new(&rpc, rep_addr, Some(private_key)) {
+                                                        Ok(rep_client) => {
+                                                            let endpoint = report.endpoint.as_deref();
+
+                                                            match rep_client
+                                                                .submit_feedback(
+                                                                    agent_id,
+                                                                    report.scores.overall,
+                                                                    "starred",
+                                                                    "",
+                                                                    endpoint,
+                                                                    &json_result.arweave_url,
+                                                                    &report_json, // Use the exact JSON that was uploaded
+                                                                )
+                                                                .await
+                                                            {
+                                                                Ok(tx_hash) => {
+                                                                    info!(
+                                                                        "On-chain feedback submitted: {} (tx: {})",
+                                                                        json_result.arweave_url, tx_hash
+                                                                    );
+                                                                    report.set_feedback_tx(chain_id, &tx_hash);
+                                                                }
+                                                                Err(e) => {
+                                                                    error!("Failed to submit on-chain feedback: {}", e);
+                                                                }
+                                                            }
+                                                        }
+                                                        Err(e) => {
+                                                            error!("Failed to create reputation client: {}", e);
+                                                        }
+                                                    }
+                                                } else {
+                                                    info!(
+                                                        "No reputation registry on chain {}, skipping on-chain feedback",
+                                                        chain_id
+                                                    );
+                                                }
                                             }
                                             Err(e) => {
                                                 error!("Failed to upload JSON to Irys: {}", e);
@@ -270,64 +321,6 @@ async fn run_audit_job(state: Arc<AppState>, audit_id: String, agent_id: u64, ch
                             }
                             Err(e) => {
                                 error!("Failed to serialize report: {}", e);
-                            }
-                        }
-
-                        // Step 6: Submit on-chain feedback (if JSON was uploaded and reputation registry exists)
-                        if let Some(ref feedback_uri) = json_arweave_url {
-                            let chain = get_chain(chain_id);
-                            let rpc_url = get_rpc_url(chain_id);
-
-                            if let (Some(chain), Some(rpc), Some(rep_addr)) =
-                                (chain, rpc_url, chain.and_then(|c| c.reputation_address))
-                            {
-                                info!(
-                                    "Submitting on-chain feedback to {} ({})",
-                                    chain.name, rep_addr
-                                );
-
-                                match ReputationClient::new(&rpc, rep_addr, Some(private_key)) {
-                                    Ok(rep_client) => {
-                                        // Get the final JSON for hash computation
-                                        if let Ok(final_json) = serde_json::to_value(&report) {
-                                            let endpoint = report.endpoint.as_deref();
-                                            let tag1 = report.tag1.as_deref().unwrap_or("auditScore");
-                                            let tag2 = report.tag2.as_deref().unwrap_or("infrastructure");
-
-                                            match rep_client
-                                                .submit_feedback(
-                                                    agent_id,
-                                                    report.scores.overall,
-                                                    tag1,
-                                                    tag2,
-                                                    endpoint,
-                                                    feedback_uri,
-                                                    &final_json,
-                                                )
-                                                .await
-                                            {
-                                                Ok(tx_hash) => {
-                                                    info!(
-                                                        "On-chain feedback submitted: {} (tx: {})",
-                                                        feedback_uri, tx_hash
-                                                    );
-                                                    report.set_feedback_tx(chain_id, &tx_hash);
-                                                }
-                                                Err(e) => {
-                                                    error!("Failed to submit on-chain feedback: {}", e);
-                                                }
-                                            }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        error!("Failed to create reputation client: {}", e);
-                                    }
-                                }
-                            } else {
-                                info!(
-                                    "No reputation registry on chain {}, skipping on-chain feedback",
-                                    chain_id
-                                );
                             }
                         }
                     }
@@ -515,4 +508,190 @@ pub async fn list_agent_audits(
         "limit": query.limit,
         "offset": query.offset
     })))
+}
+
+// =============================================================================
+// ADMIN ENDPOINTS (protected by ADMIN_API_KEY)
+// =============================================================================
+
+/// Request body for registering a new agent
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegisterAgentRequest {
+    /// Chain ID to register on (default: config default_chain_id)
+    pub chain_id: Option<u64>,
+}
+
+/// Response for agent registration
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegisterAgentResponse {
+    pub agent_id: u64,
+    pub chain_id: u64,
+    pub chain_name: String,
+    pub registry: String,
+    pub tx_hash: String,
+    pub owner: String,
+}
+
+/// POST /admin/register - Register a new EIP-8004 agent
+///
+/// Mints a new agent NFT with empty URI. Use /admin/set-uri to set the metadata.
+/// Uses the TEE wallet (derived from mnemonic) to sign the transaction.
+pub async fn register_agent(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<RegisterAgentRequest>,
+) -> Result<(StatusCode, Json<RegisterAgentResponse>), WatchyError> {
+    let chain_id = request.chain_id.unwrap_or(state.config.default_chain_id);
+
+    // Check if chain is allowed (testnet-only mode)
+    if !is_chain_allowed(chain_id) {
+        return Err(WatchyError::InvalidRequest(format!(
+            "Chain {} is not enabled. Currently only testnets are allowed.",
+            chain_id
+        )));
+    }
+
+    // Get chain config
+    let chain = get_chain(chain_id).ok_or_else(|| {
+        WatchyError::InvalidRequest(format!("Unsupported chain_id: {}", chain_id))
+    })?;
+
+    let registry_address = chain.registry_address.ok_or_else(|| {
+        WatchyError::InvalidRequest(format!(
+            "No registry deployed on {} (chain_id: {})",
+            chain.name, chain_id
+        ))
+    })?;
+
+    let rpc_url = get_rpc_url(chain_id).ok_or_else(|| {
+        WatchyError::InvalidRequest(format!("No RPC URL for chain {}", chain_id))
+    })?;
+
+    // Get the TEE wallet private key
+    let private_key = state.config.private_key().ok_or_else(|| {
+        WatchyError::Internal("No wallet configured (MNEMONIC or PRIVATE_KEY required)".to_string())
+    })?;
+
+    let signer_address = state.config.signer_address().ok_or_else(|| {
+        WatchyError::Internal("Could not derive signer address".to_string())
+    })?;
+
+    info!(
+        "Registering new agent on {} ({}) with signer {}",
+        chain.name, chain_id, signer_address
+    );
+
+    // Create registry client and register
+    let registry = RegistryClient::new(&rpc_url, registry_address)?;
+    let (agent_id, tx_hash) = registry.register_agent(private_key).await?;
+
+    info!(
+        "Agent {} registered on {} (tx: {})",
+        agent_id, chain.name, tx_hash
+    );
+
+    Ok((
+        StatusCode::CREATED,
+        Json(RegisterAgentResponse {
+            agent_id,
+            chain_id,
+            chain_name: chain.name.to_string(),
+            registry: registry_address.to_string(),
+            tx_hash,
+            owner: signer_address.to_string(),
+        }),
+    ))
+}
+
+/// Request body for updating an agent's URI
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateAgentUriRequest {
+    /// The agent token ID to update
+    pub agent_id: u64,
+    /// The URI to set (e.g., "data:application/json;base64,..." or IPFS/Arweave URL)
+    pub uri: String,
+    /// Chain ID (default: config default_chain_id)
+    pub chain_id: Option<u64>,
+}
+
+/// Response for URI update
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateAgentUriResponse {
+    pub agent_id: u64,
+    pub chain_id: u64,
+    pub chain_name: String,
+    pub tx_hash: String,
+    pub uri: String,
+}
+
+/// POST /admin/set-uri - Update an agent's metadata URI
+///
+/// Updates the metadata URI for an existing agent. The caller must be the owner
+/// or an approved operator of the agent. Uses TEE wallet for signing.
+///
+/// The URI can be:
+/// - A base64 data URI: "data:application/json;base64,eyJ0eXBlIjoi..."
+/// - An IPFS URL: "ipfs://Qm..."
+/// - An Arweave URL: "https://arweave.net/..."
+pub async fn set_agent_uri(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<UpdateAgentUriRequest>,
+) -> Result<Json<UpdateAgentUriResponse>, WatchyError> {
+    let chain_id = request.chain_id.unwrap_or(state.config.default_chain_id);
+
+    // Check if chain is allowed
+    if !is_chain_allowed(chain_id) {
+        return Err(WatchyError::InvalidRequest(format!(
+            "Chain {} is not enabled. Currently only testnets are allowed.",
+            chain_id
+        )));
+    }
+
+    // Get chain config
+    let chain = get_chain(chain_id).ok_or_else(|| {
+        WatchyError::InvalidRequest(format!("Unsupported chain_id: {}", chain_id))
+    })?;
+
+    let registry_address = chain.registry_address.ok_or_else(|| {
+        WatchyError::InvalidRequest(format!(
+            "No registry deployed on {} (chain_id: {})",
+            chain.name, chain_id
+        ))
+    })?;
+
+    let rpc_url = get_rpc_url(chain_id).ok_or_else(|| {
+        WatchyError::InvalidRequest(format!("No RPC URL for chain {}", chain_id))
+    })?;
+
+    // Get the TEE wallet private key
+    let private_key = state.config.private_key().ok_or_else(|| {
+        WatchyError::Internal("No wallet configured (MNEMONIC or PRIVATE_KEY required)".to_string())
+    })?;
+
+    info!(
+        "Updating URI for agent {} on {} ({}) - URI length: {} bytes",
+        request.agent_id, chain.name, chain_id, request.uri.len()
+    );
+
+    // Create registry client and update URI
+    let registry = RegistryClient::new(&rpc_url, registry_address)?;
+    let tx_hash = registry
+        .set_agent_uri(request.agent_id, &request.uri, private_key)
+        .await?;
+
+    info!(
+        "Agent {} URI updated on {} (tx: {})",
+        request.agent_id, chain.name, tx_hash
+    );
+
+    Ok(Json(UpdateAgentUriResponse {
+        agent_id: request.agent_id,
+        chain_id,
+        chain_name: chain.name.to_string(),
+        tx_hash,
+        uri: request.uri,
+    }))
 }

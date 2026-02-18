@@ -87,6 +87,11 @@ async fn main() -> Result<()> {
     } else {
         info!("API key authentication disabled (open mode)");
     }
+    if config.admin_api_key.is_some() {
+        info!("Admin API key configured (admin endpoints enabled)");
+    } else {
+        info!("Admin API key not configured (admin endpoints disabled)");
+    }
 
     // Build router
     // Protected routes (require API key if configured)
@@ -98,9 +103,18 @@ async fn main() -> Result<()> {
             api::middleware::require_api_key,
         ));
 
+    // Admin routes (require ADMIN_API_KEY - always required)
+    let admin_routes = Router::new()
+        .nest("/admin", api::routes::admin_routes())
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            api::middleware::require_admin_api_key,
+        ));
+
     let app = Router::new()
         .route("/health", get(api::handlers::health))
         .merge(protected_routes)
+        .merge(admin_routes)
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
         .with_state(state);

@@ -211,25 +211,41 @@ fn check_skills_consistency(
     consistent
 }
 
+/// Strict skill matching for consistency checks
+/// Matches if:
+/// - Exact match (case-insensitive)
+/// - OASF taxonomy path match: last segments match
 fn skills_match(declared: &str, actual: &str) -> bool {
-    // Handle OASF taxonomy paths vs simple IDs
-    // e.g., "agent_orchestration/agent_coordination" should match "agent_coordination"
     let declared_lower = declared.to_lowercase();
     let actual_lower = actual.to_lowercase();
 
+    // Exact match
     if declared_lower == actual_lower {
         return true;
     }
 
-    // Check if the last segment of the path matches
-    if let Some(last_segment) = declared_lower.rsplit('/').next() {
-        if last_segment == actual_lower || actual_lower.contains(last_segment) {
+    // OASF taxonomy path matching
+    let declared_segments: Vec<&str> = declared_lower.split('/').collect();
+    let actual_segments: Vec<&str> = actual_lower.split('/').collect();
+
+    // Check if last segments match
+    if let (Some(declared_last), Some(actual_last)) = (declared_segments.last(), actual_segments.last()) {
+        if declared_last == actual_last {
             return true;
         }
     }
 
-    // Check if actual contains declared or vice versa
-    declared_lower.contains(&actual_lower) || actual_lower.contains(&declared_lower)
+    // Check if declared is a suffix of actual or vice versa (for paths)
+    if declared_segments.len() > 1 && actual_segments.len() > 1 {
+        let min_len = declared_segments.len().min(actual_segments.len());
+        let declared_suffix: Vec<&str> = declared_segments.iter().rev().take(min_len).cloned().collect();
+        let actual_suffix: Vec<&str> = actual_segments.iter().rev().take(min_len).cloned().collect();
+        if declared_suffix == actual_suffix {
+            return true;
+        }
+    }
+
+    false
 }
 
 fn check_version_consistency(
@@ -245,7 +261,7 @@ fn check_version_consistency(
         match service.name.to_lowercase().as_str() {
             "a2a" => {
                 if let (Some(declared), Some(actual)) = (declared_version, &responses.a2a_version) {
-                    if declared != actual {
+                    if !versions_match(declared, actual) {
                         consistent = false;
                         issues.push(Issue {
                             severity: Severity::Info,
@@ -260,7 +276,7 @@ fn check_version_consistency(
             }
             "mcp" => {
                 if let (Some(declared), Some(actual)) = (declared_version, &responses.mcp_version) {
-                    if declared != actual {
+                    if !versions_match(declared, actual) {
                         consistent = false;
                         issues.push(Issue {
                             severity: Severity::Info,
@@ -278,6 +294,60 @@ fn check_version_consistency(
     }
 
     consistent
+}
+
+/// Semantic version matching with flexibility
+/// Matches if:
+/// - Exact match (case-insensitive)
+/// - Version with/without 'v' prefix: "v1.0" matches "1.0"
+/// - Major.minor matches major.minor.patch: "1.0" matches "1.0.0"
+/// - Versions with same major.minor: "1.0.1" matches "1.0.2" (compatible)
+fn versions_match(declared: &str, actual: &str) -> bool {
+    let d = normalize_version(declared);
+    let a = normalize_version(actual);
+
+    // Exact match after normalization
+    if d == a {
+        return true;
+    }
+
+    // Parse into components
+    let d_parts: Vec<u32> = d.split('.').filter_map(|s| s.parse().ok()).collect();
+    let a_parts: Vec<u32> = a.split('.').filter_map(|s| s.parse().ok()).collect();
+
+    if d_parts.is_empty() || a_parts.is_empty() {
+        return false;
+    }
+
+    // Major version must match
+    if d_parts[0] != a_parts[0] {
+        return false;
+    }
+
+    // If only major is declared, match any minor/patch
+    if d_parts.len() == 1 {
+        return true;
+    }
+
+    // Minor version must match if both have it
+    if d_parts.len() >= 2 && a_parts.len() >= 2 {
+        if d_parts[1] != a_parts[1] {
+            return false;
+        }
+    }
+
+    // Patch can differ (compatible versions)
+    true
+}
+
+/// Normalize version string: remove 'v' prefix, trim whitespace
+fn normalize_version(version: &str) -> String {
+    version
+        .trim()
+        .to_lowercase()
+        .strip_prefix('v')
+        .unwrap_or(version.trim())
+        .to_string()
 }
 
 async fn check_image_accessible(client: &reqwest::Client, image_url: &str) -> bool {

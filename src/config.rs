@@ -18,6 +18,8 @@ pub struct Config {
     pub wallet: WalletConfig,
     /// API key for service-to-service authentication (optional)
     pub api_key: Option<String>,
+    /// Admin API key for privileged operations like agent registration (optional)
+    pub admin_api_key: Option<String>,
 }
 
 impl Config {
@@ -49,6 +51,9 @@ impl Config {
 
             // API key for service-to-service auth (if set, all requests must include X-API-Key header)
             api_key: env::var("API_KEY").ok(),
+
+            // Admin API key for privileged operations (agent registration, etc.)
+            admin_api_key: env::var("ADMIN_API_KEY").ok(),
         })
     }
 

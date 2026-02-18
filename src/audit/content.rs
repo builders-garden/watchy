@@ -15,6 +15,23 @@ const PLACEHOLDER_TEXTS: &[&str] = &[
     "test agent",
     "example agent",
     "insert description",
+    "under construction",
+    "wip",
+    "work in progress",
+    "coming soon",
+    "not yet available",
+    "sample description",
+    "default description",
+    "add description",
+    "enter description",
+    "your description",
+    "description goes here",
+    "[description]",
+    "<description>",
+    "n/a",
+    "none",
+    "empty",
+    "blank",
 ];
 
 /// Run content quality checks on metadata
@@ -181,105 +198,174 @@ fn check_skill_taxonomy(metadata: &AgentMetadata, issues: &mut Vec<Issue>) -> bo
 
 fn check_contact_info(metadata: &AgentMetadata) -> bool {
     // Check for contact info in description or dedicated fields
-    let desc = metadata.description.as_deref().unwrap_or("").to_lowercase();
+    let desc = metadata.description.as_deref().unwrap_or("");
 
-    // Look for email patterns
-    let has_email = desc.contains('@') && desc.contains('.');
+    // Look for email patterns (simple but more accurate pattern)
+    let has_email = check_has_email(desc);
 
     // Look for URLs that might be support/contact pages
-    let has_contact_url = desc.contains("support")
-        || desc.contains("contact")
-        || desc.contains("help")
-        || desc.contains("discord")
-        || desc.contains("telegram")
-        || desc.contains("twitter")
-        || desc.contains("github");
+    let desc_lower = desc.to_lowercase();
+    let contact_keywords = [
+        "support", "contact", "help", "discord", "telegram",
+        "twitter", "github", "email", "mailto:", "x.com",
+        "@twitter", "@discord", "t.me/", "discord.gg/"
+    ];
+    let has_contact_url = contact_keywords.iter().any(|kw| desc_lower.contains(kw));
+
+    // Check author info for contact
+    let has_author_contact = metadata.author.as_ref().map(|a| {
+        a.url.is_some() || a.twitter.is_some()
+    }).unwrap_or(false);
 
     // Check if web service might have contact
     let has_web = metadata.services.iter().any(|s| s.name.to_lowercase() == "web");
 
-    has_email || has_contact_url || has_web
+    has_email || has_contact_url || has_author_contact || has_web
 }
+
+/// Check if text contains a valid email pattern
+fn check_has_email(text: &str) -> bool {
+    // Simple email pattern: something@something.something
+    // Must have: local part, @, domain, ., tld
+    let words: Vec<&str> = text.split_whitespace().collect();
+
+    for word in words {
+        // Strip common punctuation from the word
+        let cleaned = word.trim_matches(|c: char| c.is_ascii_punctuation() && c != '@' && c != '.' && c != '-' && c != '_');
+
+        if let Some(at_pos) = cleaned.find('@') {
+            let (local, domain) = cleaned.split_at(at_pos);
+            let domain = &domain[1..]; // Skip the @
+
+            // Local part must be non-empty and reasonable
+            if local.is_empty() || local.len() > 64 {
+                continue;
+            }
+
+            // Domain must have at least one dot and valid structure
+            if let Some(dot_pos) = domain.rfind('.') {
+                let tld = &domain[dot_pos + 1..];
+                let domain_part = &domain[..dot_pos];
+
+                // TLD must be 2-10 chars, domain part must be non-empty
+                if !domain_part.is_empty()
+                    && tld.len() >= 2
+                    && tld.len() <= 10
+                    && tld.chars().all(|c| c.is_ascii_alphabetic())
+                {
+                    return true;
+                }
+            }
+        }
+    }
+
+    false
+}
+
+/// Timeout for x402 test requests in seconds
+const X402_TEST_TIMEOUT_SECS: u64 = 10;
 
 async fn check_x402_support(client: &reqwest::Client, metadata: &AgentMetadata) -> X402Check {
     let mut check = X402Check::default();
 
-    // Find a paid endpoint to test
-    let test_endpoint = metadata.services.iter()
-        .filter(|s| s.endpoint.is_some())
-        .find(|s| {
-            s.name.to_lowercase() == "mcp" || s.name.to_lowercase() == "a2a"
+    // Find all MCP/A2A endpoints to test
+    let test_endpoints: Vec<&str> = metadata.services.iter()
+        .filter(|s| {
+            let name = s.name.to_lowercase();
+            (name == "mcp" || name == "a2a") && s.endpoint.is_some()
         })
-        .and_then(|s| s.endpoint.as_ref());
+        .filter_map(|s| s.endpoint.as_deref())
+        .filter(|e| e.starts_with("http"))
+        .collect();
 
-    let Some(endpoint) = test_endpoint else {
+    if test_endpoints.is_empty() {
         check.error = Some("No testable endpoint found for x402 verification".to_string());
         return check;
-    };
+    }
 
-    debug!("Testing x402 support at {}", endpoint);
+    debug!("Testing x402 support on {} endpoints", test_endpoints.len());
 
-    // Send request without payment credentials
-    match client.get(endpoint).send().await {
-        Ok(response) => {
-            let status = response.status();
-            let headers = response.headers();
+    let mut valid_count = 0;
+    let mut errors = vec![];
 
-            // Check for 402 Payment Required
-            if status.as_u16() == 402 {
-                check.returns_402 = true;
+    for endpoint in &test_endpoints {
+        debug!("Testing x402 support at {}", endpoint);
 
-                // Check for required payment headers
-                // Standard x402 headers (various implementations use different headers)
-                let payment_address = headers
-                    .get("x-payment-address")
-                    .or_else(|| headers.get("x-402-address"))
-                    .or_else(|| headers.get("www-authenticate"))
-                    .and_then(|v| v.to_str().ok())
-                    .map(|s| s.to_string());
+        // Send request without payment credentials
+        let result = client
+            .get(*endpoint)
+            .timeout(std::time::Duration::from_secs(X402_TEST_TIMEOUT_SECS))
+            .send()
+            .await;
 
-                let payment_amount = headers
-                    .get("x-payment-amount")
-                    .or_else(|| headers.get("x-402-amount"))
-                    .and_then(|v| v.to_str().ok())
-                    .map(|s| s.to_string());
+        match result {
+            Ok(response) => {
+                let status = response.status();
+                let headers = response.headers();
 
-                let payment_network = headers
-                    .get("x-payment-network")
-                    .or_else(|| headers.get("x-402-network"))
-                    .or_else(|| headers.get("x-chain-id"))
-                    .and_then(|v| v.to_str().ok())
-                    .map(|s| s.to_string());
+                // Check for 402 Payment Required
+                if status.as_u16() == 402 {
+                    check.returns_402 = true;
 
-                check.has_payment_address = payment_address.is_some();
-                check.has_payment_amount = payment_amount.is_some();
-                check.has_payment_network = payment_network.is_some();
-                check.payment_address = payment_address;
-                check.payment_amount = payment_amount;
-                check.payment_network = payment_network;
+                    // Check for required payment headers
+                    // Standard x402 headers (various implementations use different headers)
+                    let payment_address = headers
+                        .get("x-payment-address")
+                        .or_else(|| headers.get("x-402-address"))
+                        .and_then(|v| v.to_str().ok())
+                        .map(|s| s.to_string());
 
-                // Valid x402 requires at least address
-                check.valid = check.has_payment_address;
+                    let payment_amount = headers
+                        .get("x-payment-amount")
+                        .or_else(|| headers.get("x-402-amount"))
+                        .and_then(|v| v.to_str().ok())
+                        .map(|s| s.to_string());
 
-                if !check.valid {
-                    check.error = Some("402 response missing required payment headers".to_string());
+                    let payment_network = headers
+                        .get("x-payment-network")
+                        .or_else(|| headers.get("x-402-network"))
+                        .or_else(|| headers.get("x-chain-id"))
+                        .and_then(|v| v.to_str().ok())
+                        .map(|s| s.to_string());
+
+                    // Update check fields with first valid response
+                    if payment_address.is_some() && check.payment_address.is_none() {
+                        check.has_payment_address = true;
+                        check.has_payment_amount = payment_amount.is_some();
+                        check.has_payment_network = payment_network.is_some();
+                        check.payment_address = payment_address;
+                        check.payment_amount = payment_amount;
+                        check.payment_network = payment_network;
+                        valid_count += 1;
+                    } else if payment_address.is_none() {
+                        errors.push(format!("{}: 402 response missing payment headers", endpoint));
+                    } else {
+                        valid_count += 1;
+                    }
+                } else if status.is_success() {
+                    // Endpoint is free despite claiming x402 support
+                    errors.push(format!(
+                        "{}: returned {} but claims x402Support=true",
+                        endpoint, status.as_u16()
+                    ));
+                } else if status.as_u16() == 401 {
+                    // Auth required but not 402
+                    errors.push(format!("{}: requires auth (401) not payment (402)", endpoint));
+                } else {
+                    errors.push(format!("{}: unexpected status {}", endpoint, status.as_u16()));
                 }
-            } else if status.is_success() {
-                // Endpoint is free despite claiming x402 support
-                check.error = Some(format!(
-                    "Endpoint returned {} but metadata claims x402Support=true",
-                    status.as_u16()
-                ));
-            } else if status.as_u16() == 401 {
-                // Auth required but not 402
-                check.error = Some("Endpoint requires auth (401) but not payment (402)".to_string());
-            } else {
-                check.error = Some(format!("Unexpected status code: {}", status.as_u16()));
+            }
+            Err(e) => {
+                errors.push(format!("{}: {}", endpoint, e));
             }
         }
-        Err(e) => {
-            check.error = Some(format!("Failed to test x402: {}", e));
-        }
+    }
+
+    // Valid if at least one endpoint returns proper 402
+    check.valid = valid_count > 0;
+
+    if !check.valid && !errors.is_empty() {
+        check.error = Some(errors.join("; "));
     }
 
     check

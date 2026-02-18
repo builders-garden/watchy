@@ -21,3 +21,10 @@ pub fn agent_routes() -> Router<Arc<AppState>> {
         get(handlers::list_agent_audits),
     )
 }
+
+/// Admin routes for privileged operations (protected by ADMIN_API_KEY)
+pub fn admin_routes() -> Router<Arc<AppState>> {
+    Router::new()
+        .route("/register", post(handlers::register_agent))
+        .route("/set-uri", post(handlers::set_agent_uri))
+}

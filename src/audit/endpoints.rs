@@ -27,7 +27,7 @@ pub async fn test_endpoint(
     };
 
     // Measure latency with multiple requests
-    let latencies = measure_latency(client, endpoint, 3).await;
+    let latencies = measure_latency(client, endpoint, LATENCY_SAMPLES).await;
 
     if latencies.is_empty() {
         check.error = Some("Connection failed".to_string());
@@ -99,7 +99,7 @@ pub async fn test_endpoint_with_response(
     };
 
     // Measure latency with multiple requests
-    let latencies = measure_latency(client, endpoint, 3).await;
+    let latencies = measure_latency(client, endpoint, LATENCY_SAMPLES).await;
 
     if latencies.is_empty() {
         check.error = Some("Connection failed".to_string());
@@ -147,19 +147,30 @@ pub async fn test_endpoint_with_response(
     (check, json_response)
 }
 
+/// Timeout for HEAD requests in milliseconds
+const HEAD_REQUEST_TIMEOUT_MS: u64 = 10000;
+
+/// Number of samples for latency measurement (more samples = more accurate percentiles)
+const LATENCY_SAMPLES: u32 = 10;
+
 async fn measure_latency(client: &reqwest::Client, endpoint: &str, samples: u32) -> Vec<u64> {
     let mut latencies = vec![];
+    let timeout = std::time::Duration::from_millis(HEAD_REQUEST_TIMEOUT_MS);
 
     for _ in 0..samples {
         let start = Instant::now();
-        let result = client.head(endpoint).send().await;
+        let result = client
+            .head(endpoint)
+            .timeout(timeout)
+            .send()
+            .await;
 
         if result.is_ok() {
             latencies.push(start.elapsed().as_millis() as u64);
         }
 
         // Small delay between requests
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
     }
 
     latencies
@@ -238,13 +249,19 @@ async fn validate_a2a(
         if let Some(skills) = json.get("skills").and_then(|v| v.as_array()) {
             let actual_skills: Vec<String> = skills
                 .iter()
-                .filter_map(|s| s.as_str().map(|s| s.to_string()))
+                .filter_map(|s| {
+                    // Skills can be objects with "id" field or plain strings
+                    s.get("id")
+                        .and_then(|v| v.as_str())
+                        .or_else(|| s.as_str())
+                        .map(|s| s.to_string())
+                })
                 .collect();
 
             let declared_present = service
                 .a2a_skills
                 .iter()
-                .all(|s| actual_skills.iter().any(|a| a.contains(s) || s.contains(a)));
+                .all(|declared| skills_match_strict(declared, &actual_skills));
 
             check.skills_match = Some(declared_present);
 
@@ -257,6 +274,51 @@ async fn validate_a2a(
             }
         }
     }
+}
+
+/// Strict skill matching for A2A skills
+/// Matches if:
+/// - Exact match (case-insensitive)
+/// - OASF taxonomy path match: "domain/subdomain/skill" matches "skill" or "subdomain/skill"
+fn skills_match_strict(declared: &str, actual_skills: &[String]) -> bool {
+    let declared_lower = declared.to_lowercase();
+
+    for actual in actual_skills {
+        let actual_lower = actual.to_lowercase();
+
+        // Exact match
+        if declared_lower == actual_lower {
+            return true;
+        }
+
+        // OASF taxonomy path matching
+        // declared: "agent_orchestration/task_delegation" should match actual: "task_delegation"
+        // declared: "task_delegation" should match actual: "agent_orchestration/task_delegation"
+        let declared_segments: Vec<&str> = declared_lower.split('/').collect();
+        let actual_segments: Vec<&str> = actual_lower.split('/').collect();
+
+        // Check if the last segment(s) match
+        if let Some(declared_last) = declared_segments.last() {
+            if let Some(actual_last) = actual_segments.last() {
+                if declared_last == actual_last {
+                    return true;
+                }
+            }
+        }
+
+        // Check if declared is a suffix of actual or vice versa
+        if declared_segments.len() > 1 && actual_segments.len() > 1 {
+            // Compare from the end
+            let min_len = declared_segments.len().min(actual_segments.len());
+            let declared_suffix: Vec<&str> = declared_segments.iter().rev().take(min_len).cloned().collect();
+            let actual_suffix: Vec<&str> = actual_segments.iter().rev().take(min_len).cloned().collect();
+            if declared_suffix == actual_suffix {
+                return true;
+            }
+        }
+    }
+
+    false
 }
 
 #[allow(dead_code)]
@@ -405,13 +467,19 @@ async fn validate_a2a_with_response(
         if let Some(skills) = json.get("skills").and_then(|v| v.as_array()) {
             let actual_skills: Vec<String> = skills
                 .iter()
-                .filter_map(|s| s.as_str().map(|s| s.to_string()))
+                .filter_map(|s| {
+                    // Skills can be objects with "id" field or plain strings
+                    s.get("id")
+                        .and_then(|v| v.as_str())
+                        .or_else(|| s.as_str())
+                        .map(|s| s.to_string())
+                })
                 .collect();
 
             let declared_present = service
                 .a2a_skills
                 .iter()
-                .all(|s| actual_skills.iter().any(|a| a.contains(s) || s.contains(a)));
+                .all(|declared| skills_match_strict(declared, &actual_skills));
 
             check.skills_match = Some(declared_present);
 

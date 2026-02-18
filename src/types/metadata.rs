@@ -94,12 +94,12 @@ pub struct Author {
 }
 
 impl AgentMetadata {
-    /// Check if required fields are present
+    /// Check if required fields are present and non-empty
     pub fn has_required_fields(&self) -> bool {
-        self.metadata_type.is_some()
-            && self.name.is_some()
-            && self.description.is_some()
-            && self.image.is_some()
+        self.metadata_type.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false)
+            && self.name.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false)
+            && self.description.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false)
+            && self.image.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false)
             && !self.registrations.is_empty()
     }
 
@@ -112,12 +112,36 @@ impl AgentMetadata {
     }
 
     /// Find registration matching the given agent ID and registry
+    /// Registry format expected: "eip155:<chainId>:<address>"
     pub fn find_registration(&self, agent_id: u64, registry: &str) -> Option<&Registration> {
+        let registry_lower = registry.to_lowercase();
+
         self.registrations.iter().find(|r| {
-            r.agent_id == agent_id
-                && r.agent_registry
-                    .to_lowercase()
-                    .contains(&registry.to_lowercase())
+            if r.agent_id != agent_id {
+                return false;
+            }
+
+            let r_registry_lower = r.agent_registry.to_lowercase();
+
+            // Exact match
+            if r_registry_lower == registry_lower {
+                return true;
+            }
+
+            // Parse CAIP-10 format: eip155:<chainId>:<address>
+            // Allow matching if chain and address match (ignoring case)
+            let r_parts: Vec<&str> = r_registry_lower.split(':').collect();
+            let registry_parts: Vec<&str> = registry_lower.split(':').collect();
+
+            // Both should have format eip155:chainId:address
+            if r_parts.len() == 3 && registry_parts.len() == 3 {
+                // Match namespace (eip155), chain_id, and full address
+                r_parts[0] == registry_parts[0]
+                    && r_parts[1] == registry_parts[1]
+                    && r_parts[2] == registry_parts[2]
+            } else {
+                false
+            }
         })
     }
 }

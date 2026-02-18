@@ -341,8 +341,8 @@ impl AuditReport {
             value_decimals: 0,
 
             // Feedback optional fields
-            tag1: Some("auditScore".to_string()),
-            tag2: Some("infrastructure".to_string()),
+            tag1: Some("starred".to_string()),
+            tag2: None,
             endpoint: None, // Will be set if endpoints exist
 
             // Audit report fields

@@ -7,6 +7,9 @@
 .env.local
 .env.*.local
 
+# Documentation
+docs/
+
 # IDE
 .idea/
 .vscode/

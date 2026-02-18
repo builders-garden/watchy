@@ -133,6 +133,9 @@ fn parse_data_uri(content: &str) -> Result<AgentMetadata, WatchyError> {
     ))
 }
 
+/// Maximum metadata size in bytes (1 MB)
+const MAX_METADATA_SIZE: usize = 1024 * 1024;
+
 /// Try to fetch metadata from a single URL
 async fn try_fetch_metadata(
     client: &reqwest::Client,
@@ -150,9 +153,30 @@ async fn try_fetch_metadata(
         return Err(format!("HTTP {}", response.status()));
     }
 
-    let metadata: AgentMetadata = response
-        .json()
+    // Check content-length if available
+    if let Some(content_length) = response.content_length() {
+        if content_length as usize > MAX_METADATA_SIZE {
+            return Err(format!(
+                "Metadata too large: {} bytes (max {} bytes)",
+                content_length, MAX_METADATA_SIZE
+            ));
+        }
+    }
+
+    // Read body with size limit
+    let bytes = response
+        .bytes()
         .await
+        .map_err(|e| format!("Failed to read response body: {}", e))?;
+
+    if bytes.len() > MAX_METADATA_SIZE {
+        return Err(format!(
+            "Metadata too large: {} bytes (max {} bytes)",
+            bytes.len(), MAX_METADATA_SIZE
+        ));
+    }
+
+    let metadata: AgentMetadata = serde_json::from_slice(&bytes)
         .map_err(|e| format!("JSON parse error: {}", e))?;
 
     Ok(metadata)

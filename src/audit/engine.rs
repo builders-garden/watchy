@@ -218,11 +218,21 @@ impl AuditEngine {
             }
         }
 
-        // URL validation (simplified - would do actual HTTP checks in production)
+        // URL validation - validate format of URLs in metadata
+        let url_validation = validate_urls(metadata);
         checks.urls_valid = CheckResult {
-            passed: true, // TODO: actual validation
-            details: serde_json::Value::Null,
+            passed: url_validation.0,
+            details: url_validation.1,
         };
+
+        if !checks.urls_valid.passed {
+            score = score.saturating_sub(10);
+            checks.issues.push(Issue {
+                severity: Severity::Warning,
+                code: "INVALID_URLS".to_string(),
+                message: "One or more URLs in metadata are malformed".to_string(),
+            });
+        }
 
         checks.passed = score >= 60;
         report.scores.metadata = score;
@@ -396,4 +406,74 @@ fn latency_to_score(p95_ms: u64) -> u64 {
         2001..=5000 => 20,
         _ => 0,
     }
+}
+
+/// Validate URLs in metadata
+fn validate_urls(metadata: &AgentMetadata) -> (bool, serde_json::Value) {
+    let mut invalid_urls = vec![];
+    let mut valid_count = 0;
+
+    // Validate image URL
+    if let Some(image) = &metadata.image {
+        if is_valid_url(image) {
+            valid_count += 1;
+        } else {
+            invalid_urls.push(format!("image: {}", image));
+        }
+    }
+
+    // Validate service endpoints
+    for service in &metadata.services {
+        if let Some(endpoint) = &service.endpoint {
+            if is_valid_url(endpoint) {
+                valid_count += 1;
+            } else {
+                invalid_urls.push(format!("{} endpoint: {}", service.name, endpoint));
+            }
+        }
+    }
+
+    // Validate documentation URL
+    if let Some(docs) = &metadata.documentation {
+        if is_valid_url(docs) {
+            valid_count += 1;
+        } else {
+            invalid_urls.push(format!("documentation: {}", docs));
+        }
+    }
+
+    // Validate source code URL
+    if let Some(source) = &metadata.source_code {
+        if is_valid_url(source) {
+            valid_count += 1;
+        } else {
+            invalid_urls.push(format!("sourceCode: {}", source));
+        }
+    }
+
+    let passed = invalid_urls.is_empty();
+    let details = serde_json::json!({
+        "valid_count": valid_count,
+        "invalid_urls": invalid_urls,
+    });
+
+    (passed, details)
+}
+
+/// Check if a string is a valid URL (http, https, ipfs, ar, or data URI)
+fn is_valid_url(url: &str) -> bool {
+    // Allow various URI schemes
+    if url.starts_with("ipfs://") || url.starts_with("ar://") || url.starts_with("data:") {
+        return true;
+    }
+
+    // Validate http/https URLs
+    if url.starts_with("http://") || url.starts_with("https://") {
+        // Basic URL validation - must have host
+        if let Ok(parsed) = url::Url::parse(url) {
+            return parsed.host().is_some();
+        }
+    }
+
+    false
 }

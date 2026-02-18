@@ -1,4 +1,7 @@
+use native_tls::TlsConnector;
+use std::net::ToSocketAddrs;
 use tracing::{debug, warn};
+use x509_parser::prelude::*;
 
 use crate::types::{Issue, SecurityChecks, SecurityHeadersCheck, Severity};
 
@@ -109,10 +112,18 @@ struct TlsInfo {
 }
 
 async fn check_tls(endpoint: &str) -> Result<TlsInfo, String> {
-    // Simplified TLS check - if the HTTPS request succeeds, TLS is valid
-    // Note: Getting actual TLS version would require rustls or openssl bindings
+    // Parse the URL to get host and port
+    let url = url::Url::parse(endpoint).map_err(|e| format!("Invalid URL: {}", e))?;
+    let host = url.host_str().ok_or("No host in URL")?;
+    let port = url.port().unwrap_or(443);
+
+    // Try to get certificate expiry using native-tls
+    let cert_days = get_certificate_expiry_days(host, port).await;
+
+    // Also do a standard TLS check with reqwest to verify connectivity
     let client = reqwest::Client::builder()
         .danger_accept_invalid_certs(false)
+        .timeout(std::time::Duration::from_secs(10))
         .build()
         .map_err(|e| e.to_string())?;
 
@@ -121,9 +132,9 @@ async fn check_tls(endpoint: &str) -> Result<TlsInfo, String> {
             // TLS handshake succeeded - connection is secure
             Ok(TlsInfo {
                 valid: true,
-                version: "TLS 1.2+".to_string(), // Assumed - modern clients negotiate TLS 1.2+
-                cert_valid: true, // If we got here, cert is valid
-                cert_days_remaining: None, // Would need openssl bindings for expiry check
+                version: "TLS 1.2+".to_string(),
+                cert_valid: cert_days.map(|d| d > 0).unwrap_or(true),
+                cert_days_remaining: cert_days,
             })
         }
         Err(e) => {
@@ -131,16 +142,68 @@ async fn check_tls(endpoint: &str) -> Result<TlsInfo, String> {
                 // Could be cert error or connection refused
                 Err(format!("Connection/TLS error: {}", e))
             } else {
-                // Request failed but TLS handshake succeeded
+                // Request failed but TLS handshake may have succeeded
                 Ok(TlsInfo {
                     valid: true,
                     version: "TLS 1.2+".to_string(),
-                    cert_valid: true,
-                    cert_days_remaining: None,
+                    cert_valid: cert_days.map(|d| d > 0).unwrap_or(true),
+                    cert_days_remaining: cert_days,
                 })
             }
         }
     }
+}
+
+/// Get the number of days until the certificate expires
+async fn get_certificate_expiry_days(host: &str, port: u16) -> Option<i64> {
+    // Run in a blocking task since native-tls is sync
+    let host = host.to_string();
+    tokio::task::spawn_blocking(move || {
+        get_cert_expiry_sync(&host, port)
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+/// Synchronous certificate expiry check
+fn get_cert_expiry_sync(host: &str, port: u16) -> Option<i64> {
+    // Build TLS connector
+    let connector = TlsConnector::builder()
+        .danger_accept_invalid_certs(true) // Accept to inspect, we check validity separately
+        .build()
+        .ok()?;
+
+    // Resolve address
+    let addr = format!("{}:{}", host, port)
+        .to_socket_addrs()
+        .ok()?
+        .next()?;
+
+    // Connect with timeout
+    let stream = std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(5)).ok()?;
+    stream.set_read_timeout(Some(std::time::Duration::from_secs(5))).ok()?;
+    stream.set_write_timeout(Some(std::time::Duration::from_secs(5))).ok()?;
+
+    // TLS handshake
+    let tls_stream = connector.connect(host, stream).ok()?;
+
+    // Get peer certificate
+    let cert_der = tls_stream.peer_certificate().ok()??;
+    let cert_bytes = cert_der.to_der().ok()?;
+
+    // Parse certificate
+    let (_, cert) = X509Certificate::from_der(&cert_bytes).ok()?;
+
+    // Get expiry time
+    let not_after = cert.validity().not_after;
+    let expiry_time = not_after.timestamp();
+
+    // Calculate days remaining
+    let now = chrono::Utc::now().timestamp();
+    let days_remaining = (expiry_time - now) / 86400;
+
+    Some(days_remaining)
 }
 
 fn has_minimum_headers(headers: &SecurityHeadersCheck) -> bool {

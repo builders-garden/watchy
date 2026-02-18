@@ -15,9 +15,12 @@ sol! {
         function getMetadata(uint256 agentId, string calldata metadataKey) external view returns (bytes memory);
         function isAuthorizedOrOwner(address spender, uint256 agentId) external view returns (bool);
 
-        // Registration (for reference, not used by Watchy)
+        // Registration
         function register() external returns (uint256 agentId);
         function register(string calldata agentURI) external returns (uint256 agentId);
+
+        // URI Management
+        function setAgentURI(uint256 agentId, string calldata newURI) external;
 
         // Events
         event Registered(uint256 indexed agentId, string agentURI, address indexed owner);
