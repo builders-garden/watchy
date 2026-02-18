@@ -19,13 +19,14 @@ COPY .cargo ./.cargo
 RUN mkdir src && echo "fn main() {}" > src/main.rs
 
 # Build dependencies (cached layer)
-RUN cargo build --release && rm -rf src
+# --ignore-rust-version needed because darling 0.23.0 has incorrect MSRV (claims 1.88.0)
+RUN cargo build --release --ignore-rust-version && rm -rf src
 
 # Copy actual source
 COPY src ./src
 
 # Build application
-RUN touch src/main.rs && cargo build --release
+RUN touch src/main.rs && cargo build --release --ignore-rust-version
 
 # Runtime stage
 FROM --platform=linux/amd64 debian:bookworm-slim
