@@ -11,8 +11,9 @@ RUN apt-get update && apt-get install -y \
     libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy manifests
+# Copy manifests and cargo config
 COPY Cargo.toml Cargo.lock* ./
+COPY .cargo ./.cargo
 
 # Create dummy src for dependency caching
 RUN mkdir src && echo "fn main() {}" > src/main.rs
