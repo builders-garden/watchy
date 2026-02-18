@@ -1,6 +1,7 @@
 # Build stage
 # --platform required for EigenCloud TEE (linux/amd64)
-FROM --platform=linux/amd64 rust:1.84-slim-bookworm AS builder
+# Rust 1.85+ required for edition2024 support (getrandom 0.4+)
+FROM --platform=linux/amd64 rust:1.85-slim-bookworm AS builder
 
 WORKDIR /app
 
