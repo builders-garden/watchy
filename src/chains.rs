@@ -17,6 +17,7 @@ pub struct ChainConfig {
     pub registry_address: Option<&'static str>,
     pub reputation_address: Option<&'static str>,
     pub rpcs: Vec<&'static str>,
+    #[allow(dead_code)]
     pub block_explorer: &'static str,
 }
 
@@ -32,6 +33,7 @@ impl ChainConfig {
     }
 
     /// Check if this chain has a deployed reputation registry
+    #[allow(dead_code)]
     pub fn has_reputation(&self) -> bool {
         self.reputation_address.is_some()
     }
@@ -131,6 +133,7 @@ pub fn get_chain(chain_id: u64) -> Option<&'static ChainConfig> {
 }
 
 /// Get chain config by name
+#[allow(dead_code)]
 pub fn get_chain_by_name(name: &str) -> Option<&'static ChainConfig> {
     CHAINS.values().find(|c| c.name == name)
 }

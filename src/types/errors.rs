@@ -30,6 +30,7 @@ pub enum WatchyError {
     IpfsError(String),
 
     #[error("Rate limited")]
+    #[allow(dead_code)]
     RateLimited,
 
     #[error("Internal error: {0}")]

@@ -262,6 +262,7 @@ pub struct X402Check {
 
 /// API response for audit status
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct AuditStatusResponse {
     pub audit_id: String,
     pub status: AuditStatus,
@@ -276,6 +277,7 @@ pub struct AuditStatusResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct AuditProgress {
     pub phase: String,
     pub completed_steps: u8,
@@ -283,6 +285,7 @@ pub struct AuditProgress {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct AuditResult {
     pub scores: Scores,
     pub issues_count: IssueCount,
@@ -291,6 +294,7 @@ pub struct AuditResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct IssueCount {
     pub critical: u32,
     pub error: u32,
@@ -299,6 +303,7 @@ pub struct IssueCount {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct AuditError {
     pub code: String,
     pub message: String,

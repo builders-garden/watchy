@@ -4,6 +4,7 @@ use tracing::{debug, warn};
 use crate::types::{EndpointCheck, Issue, LatencyMetrics, Service, ServiceType, Severity};
 
 /// Test a service endpoint
+#[allow(dead_code)]
 pub async fn test_endpoint(
     client: &reqwest::Client,
     service_name: &str,
@@ -184,6 +185,7 @@ fn calculate_percentiles(latencies: &[u64]) -> LatencyMetrics {
     }
 }
 
+#[allow(dead_code)]
 async fn validate_a2a(
     client: &reqwest::Client,
     endpoint: &str,
@@ -257,6 +259,7 @@ async fn validate_a2a(
     }
 }
 
+#[allow(dead_code)]
 async fn validate_mcp(
     client: &reqwest::Client,
     endpoint: &str,
@@ -315,6 +318,7 @@ async fn validate_mcp(
     }
 }
 
+#[allow(dead_code)]
 async fn validate_oasf(
     client: &reqwest::Client,
     endpoint: &str,

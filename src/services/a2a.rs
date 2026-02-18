@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 
 /// A2A Agent Card structure (Google's Agent-to-Agent protocol)

@@ -154,6 +154,7 @@ impl ReputationClient {
 
     /// Check if the configured signer is authorized to give feedback
     /// (must NOT be owner or approved operator of the agent)
+    #[allow(dead_code)]
     pub async fn can_submit_feedback(&self, agent_id: u64) -> Result<bool, WatchyError> {
         let signer = self.signer.as_ref().ok_or_else(|| {
             WatchyError::Internal("Private key required".to_string())
@@ -171,6 +172,7 @@ impl ReputationClient {
     }
 
     /// Get feedback count for the current signer and agent
+    #[allow(dead_code)]
     pub async fn get_feedback_count(&self, agent_id: u64) -> Result<u64, WatchyError> {
         let signer = self.signer.as_ref().ok_or_else(|| {
             WatchyError::Internal("Private key required".to_string())
@@ -188,24 +190,29 @@ impl ReputationClient {
         Ok(count._0)
     }
 
+    #[allow(dead_code)]
     pub fn has_signing_key(&self) -> bool {
         self.signer.is_some()
     }
 
+    #[allow(dead_code)]
     pub fn signer_address(&self) -> Option<Address> {
         self.signer.as_ref().map(|s| s.address())
     }
 
+    #[allow(dead_code)]
     pub fn reputation_address(&self) -> &Address {
         &self.reputation_address
     }
 
+    #[allow(dead_code)]
     pub fn rpc_url(&self) -> &Url {
         &self.rpc_url
     }
 }
 
 /// Helper to compute feedbackHash from JSON
+#[allow(dead_code)]
 pub fn compute_feedback_hash(json: &serde_json::Value) -> Result<[u8; 32], WatchyError> {
     let bytes = serde_json::to_vec(json)
         .map_err(|e| WatchyError::Internal(format!("JSON serialization failed: {}", e)))?;

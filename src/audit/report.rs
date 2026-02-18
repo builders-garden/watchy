@@ -491,6 +491,7 @@ fn format_number(n: u64) -> String {
 }
 
 /// Save markdown report to file
+#[allow(dead_code)]
 pub async fn save_report(
     report: &AuditReport,
     metadata: Option<&AgentMetadata>,

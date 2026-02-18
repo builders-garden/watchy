@@ -17,6 +17,7 @@ pub struct IpfsClient {
 }
 
 #[derive(Debug, Serialize)]
+#[allow(non_snake_case)]
 struct PinataUpload {
     pinataContent: serde_json::Value,
     pinataMetadata: PinataMetadata,
@@ -156,6 +157,7 @@ impl IpfsClient {
     }
 
     /// Get the gateway URL for a CID
+    #[allow(dead_code)]
     pub fn gateway_url(&self, cid: &str) -> String {
         // Use public gateway or configured gateway
         format!("https://ipfs.io/ipfs/{}", cid)

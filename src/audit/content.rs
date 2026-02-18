@@ -1,4 +1,4 @@
-use tracing::{debug, warn};
+use tracing::debug;
 
 use crate::types::{AgentMetadata, ContentChecks, DescriptionQuality, Issue, Severity, X402Check};
 
@@ -135,7 +135,7 @@ fn check_description_quality(metadata: &AgentMetadata, issues: &mut Vec<Issue>) 
 }
 
 fn check_skill_taxonomy(metadata: &AgentMetadata, issues: &mut Vec<Issue>) -> bool {
-    let mut valid = true;
+    let valid = true;
 
     // Known OASF top-level domains
     let known_domains = [

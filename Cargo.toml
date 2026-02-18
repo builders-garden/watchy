@@ -53,8 +53,8 @@ base64 = "0.22"
 urlencoding = "2.1"
 sha2 = "0.10"
 
-# Note: ANS-104 DataItem implementation is native (src/arweave/ans104.rs)
-# This avoids the bundles-rs workspace dependency issue
+# Arweave ANS-104 bundling (for Turbo uploads)
+bundles_rs = { git = "https://github.com/loadnetwork/bundles-rs", branch = "main" }
 
 # Redis
 redis = { version = "0.25", features = ["tokio-comp", "connection-manager"] }

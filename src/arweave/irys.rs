@@ -1,10 +1,12 @@
 use alloy::primitives::{keccak256, Address, PrimitiveSignature};
 use alloy::signers::local::PrivateKeySigner;
 use alloy::signers::Signer;
+use bundles_rs::ans104::data_item::DataItem;
+use bundles_rs::ans104::tags::Tag;
+use bundles_rs::crypto::ethereum::EthereumSigner;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
-use super::ans104::{DataItem, Tag};
 use crate::types::WatchyError;
 
 /// Turbo upload endpoint for Ethereum
@@ -14,6 +16,7 @@ const TURBO_UPLOAD_URL: &str = "https://turbo.ardrive.io/tx/ethereum";
 pub struct IrysClient {
     http_client: reqwest::Client,
     private_key: Option<String>,
+    #[allow(dead_code)]
     address: Option<Address>,
 }
 
@@ -33,7 +36,6 @@ pub struct TurboUploadResponse {
 pub struct UploadResult {
     pub tx_id: String,
     pub arweave_url: String,
-    pub gateway_url: String,
 }
 
 impl IrysClient {
@@ -62,6 +64,7 @@ impl IrysClient {
     }
 
     /// Get the signer's address if available
+    #[allow(dead_code)]
     pub fn address(&self) -> Option<Address> {
         self.address
     }
@@ -83,6 +86,14 @@ impl IrysClient {
             WatchyError::Internal("Turbo upload requires a signer (PRIVATE_KEY)".to_string())
         })?;
 
+        // Parse private key and create bundles_rs signer
+        let key_clean = private_key.strip_prefix("0x").unwrap_or(private_key);
+        let key_bytes = hex::decode(key_clean)
+            .map_err(|e| WatchyError::Internal(format!("Invalid private key hex: {}", e)))?;
+
+        let signer = EthereumSigner::from_bytes(&key_bytes)
+            .map_err(|e| WatchyError::Internal(format!("Failed to create signer: {}", e)))?;
+
         // Build tags - always include Content-Type first
         let mut all_tags = vec![Tag::new("Content-Type", content_type)];
         for (name, value) in tags {
@@ -91,15 +102,14 @@ impl IrysClient {
             }
         }
 
-        // Create and sign the DataItem using our native ANS-104 implementation
+        // Create and sign the DataItem using bundles_rs
         let data_item = DataItem::build_and_sign(
-            private_key,
+            &signer,
             None, // no target
             None, // no anchor
             all_tags,
             data.to_vec(),
         )
-        .await
         .map_err(|e| WatchyError::Internal(format!("Failed to create DataItem: {}", e)))?;
 
         // Serialize the DataItem to bytes
@@ -141,7 +151,6 @@ impl IrysClient {
         let result = UploadResult {
             tx_id: upload_response.id.clone(),
             arweave_url: format!("https://arweave.net/{}", upload_response.id),
-            gateway_url: format!("https://arweave.net/{}", upload_response.id),
         };
 
         info!(
@@ -244,4 +253,48 @@ pub fn verify_report_signature(
         .map_err(|e| WatchyError::Internal(format!("Invalid address: {}", e)))?;
 
     Ok(recovered == expected)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Integration test for Turbo upload
+    /// Run with: cargo test turbo_upload_real -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore] // Only run manually with real key
+    async fn test_turbo_upload_real() {
+        // Load .env file
+        dotenvy::dotenv().ok();
+
+        let private_key = std::env::var("PRIVATE_KEY").expect("PRIVATE_KEY env var required");
+
+        let client = IrysClient::new(Some(&private_key)).expect("Failed to create client");
+
+        println!("Signer address: {:?}", client.address());
+
+        // Small test payload (well under 105kb free limit)
+        let test_data = serde_json::json!({
+            "test": true,
+            "message": "Hello from Watchy Turbo test!",
+            "timestamp": chrono::Utc::now().to_rfc3339(),
+            "source": "watchy-integration-test"
+        });
+
+        let json_str = serde_json::to_string_pretty(&test_data).unwrap();
+        println!("Uploading {} bytes...", json_str.len());
+
+        let result = client.upload_json(&test_data, "test.json").await;
+
+        match result {
+            Ok(r) => {
+                println!("\n✓ Upload successful!");
+                println!("  TX ID: {}", r.tx_id);
+                println!("  Arweave URL: {}", r.arweave_url);
+            }
+            Err(e) => {
+                panic!("Upload failed: {}", e);
+            }
+        }
+    }
 }

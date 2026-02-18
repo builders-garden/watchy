@@ -129,6 +129,7 @@ impl RegistryClient {
     }
 
     /// Get metadata value for a key
+    #[allow(dead_code)]
     pub async fn get_metadata(&self, agent_id: u64, key: &str) -> Result<Vec<u8>, WatchyError> {
         debug!("Fetching metadata '{}' for agent {}", key, agent_id);
 
@@ -157,6 +158,7 @@ impl RegistryClient {
     }
 
     /// Check if an address is authorized or owner of an agent
+    #[allow(dead_code)]
     pub async fn is_authorized_or_owner(
         &self,
         spender: &str,
@@ -179,6 +181,7 @@ impl RegistryClient {
         Ok(is_auth._0)
     }
 
+    #[allow(dead_code)]
     pub fn registry_address(&self) -> &Address {
         &self.registry_address
     }
