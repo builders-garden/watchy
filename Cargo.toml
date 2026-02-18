@@ -54,7 +54,8 @@ urlencoding = "2.1"
 sha2 = "0.10"
 
 # Arweave/Irys uploads (ANS-104)
-bundles_rs = { git = "https://github.com/loadnetwork/bundles-rs", branch = "main" }
+# Pin to v0.2.1 tag for stability
+bundles_rs = { git = "https://github.com/loadnetwork/bundles-rs", tag = "v0.2.1" }
 
 # Redis
 redis = { version = "0.25", features = ["tokio-comp", "connection-manager"] }
