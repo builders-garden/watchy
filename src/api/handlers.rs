@@ -18,22 +18,22 @@ use crate::types::{AuditRequest, AuditStatus, WatchyError};
 use crate::AppState;
 
 // =============================================================================
-// TESTNET-ONLY MODE
+// ALLOWED CHAINS
 // =============================================================================
-// Set to `false` to enable mainnet audits (Base: 8453, Ethereum: 1)
-// Currently restricted to testnets to prevent accidental mainnet transactions
-const TESTNET_ONLY: bool = true;
+// Set to `false` to allow all configured chains
+const RESTRICT_CHAINS: bool = true;
 
-/// Chain IDs allowed when TESTNET_ONLY is true
-const ALLOWED_TESTNET_CHAINS: &[u64] = &[
+/// Chain IDs allowed when RESTRICT_CHAINS is true
+const ALLOWED_CHAINS: &[u64] = &[
+    8453,     // Base
     84532,    // Base Sepolia
     11155111, // Sepolia
 ];
 
 /// Check if a chain is allowed for audits
 fn is_chain_allowed(chain_id: u64) -> bool {
-    if TESTNET_ONLY {
-        ALLOWED_TESTNET_CHAINS.contains(&chain_id)
+    if RESTRICT_CHAINS {
+        ALLOWED_CHAINS.contains(&chain_id)
     } else {
         true // All configured chains are allowed
     }
@@ -113,7 +113,7 @@ pub async fn request_audit(
     // Check if chain is allowed (testnet-only mode)
     if !is_chain_allowed(chain_id) {
         return Err(WatchyError::InvalidRequest(format!(
-            "Chain {} ({}) is not enabled. Currently only testnets are allowed: Base Sepolia (84532), Sepolia (11155111)",
+            "Chain {} ({}) is not enabled. Allowed chains: Base (8453), Base Sepolia (84532), Sepolia (11155111)",
             chain.name, chain_id
         )));
     }
@@ -547,7 +547,7 @@ pub async fn register_agent(
     // Check if chain is allowed (testnet-only mode)
     if !is_chain_allowed(chain_id) {
         return Err(WatchyError::InvalidRequest(format!(
-            "Chain {} is not enabled. Currently only testnets are allowed.",
+            "Chain {} is not enabled. Allowed chains: Base (8453), Base Sepolia (84532), Sepolia (11155111)",
             chain_id
         )));
     }
@@ -645,7 +645,7 @@ pub async fn set_agent_uri(
     // Check if chain is allowed
     if !is_chain_allowed(chain_id) {
         return Err(WatchyError::InvalidRequest(format!(
-            "Chain {} is not enabled. Currently only testnets are allowed.",
+            "Chain {} is not enabled. Allowed chains: Base (8453), Base Sepolia (84532), Sepolia (11155111)",
             chain_id
         )));
     }
